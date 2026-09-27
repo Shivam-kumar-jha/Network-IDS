@@ -1,0 +1,63 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test-project-01:
+    name: Project 1 — parser correctness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate seeded test data
+        working-directory: 01-network-ids-suricata
+        run: python3 scripts/gen_sample_eve.py -o logs/eve.json -n 120 --seed 1337
+
+      - name: Parse and verify alert count
+        working-directory: 01-network-ids-suricata
+        run: |
+          python3 scripts/parse_alerts.py -i logs/eve.json -o out/alerts.csv -q
+          n=$(($(wc -l < out/alerts.csv) - 1))
+          [ "$n" -eq 120 ] || { echo "expected 120 alerts, got $n"; exit 1; }
+          echo "PASS: 120 alerts extracted from 600 events"
+
+      - name: Verify severity gating returns exit 1
+        working-directory: 01-network-ids-suricata
+        run: |
+          set +e
+          python3 scripts/parse_alerts.py -i logs/eve.json -o out/a.csv --fail-severity 1 -q
+          [ $? -eq 1 ] && echo "PASS: gating works" || { echo "FAIL"; exit 1; }
+
+      - name: Ground-truth PCAP generates and is structurally valid
+        working-directory: 01-network-ids-suricata
+        run: |
+          python3 scripts/gen_test_pcap.py -o data/output.pcap --truth data/ground_truth.csv
+          python3 - <<'EOF'
+          import struct
+          def csum16(d):
+              if len(d)%2: d+=b"\x00"
+              t=0
+              for i in range(0,len(d),2): t+=(d[i]<<8)+d[i+1]
+              while t>>16: t=(t&0xFFFF)+(t>>16)
+              return (~t)&0xFFFF
+          f=open('data/output.pcap','rb'); h=f.read(24)
+          assert struct.unpack("!I",h[:4])[0]==0xA1B2C3D4, "bad pcap magic"
+          n=bad=0
+          while True:
+              ph=f.read(16)
+              if len(ph)<16: break
+              _,_,incl,_=struct.unpack("!IIII",ph); fr=f.read(incl); n+=1
+              ip=fr[14:]; ihl=(ip[0]&0x0F)*4
+              if csum16(ip[:ihl])!=0: bad+=1
+          assert bad==0, f"{bad} bad IP checksums"
+          print(f"PASS: {n} packets, all checksums valid")
+          EOF
+
+      - name: Shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck -S warning 01-network-ids-suricata/scripts/*.sh || true

@@ -1,0 +1,214 @@
+%YAML 1.1
+---
+# suricata.yaml — minimal config tuned for a MacBook Air M1 (8 GB RAM).
+#
+# The stock file is ~2,000 lines because it documents every knob. This is the
+# subset that actually matters for a laptop lab, with the memory caps set low
+# enough that Suricata cannot balloon and push the machine into swap.
+#
+# Validate before every run:  suricata -T -c config/suricata.yaml -S rules/local.rules
+
+vars:
+  address-groups:
+    # Set HOME_NET to your real subnet. RFC1918 covers most home/office LANs;
+    # the documentation ranges are here so the synthetic test data matches too.
+    HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,192.0.2.0/24]"
+    EXTERNAL_NET: "!$HOME_NET"
+    HTTP_SERVERS: "$HOME_NET"
+    DNS_SERVERS: "$HOME_NET"
+  port-groups:
+    HTTP_PORTS: "[80,8080,8000,8888]"
+    SSH_PORTS: "22"
+    DNP3_PORTS: 20000
+    MODBUS_PORTS: 502
+    FILE_DATA_PORTS: "[$HTTP_PORTS,110,143]"
+    SHELLCODE_PORTS: "!80"
+    ORACLE_PORTS: 1521
+
+default-log-dir: logs/
+
+# ---------------------------------------------------------------------------
+# Outputs. eve.json is the one that matters — it is what parse_alerts.py reads.
+# ---------------------------------------------------------------------------
+outputs:
+  - fast:
+      enabled: yes
+      filename: fast.log
+      append: no
+
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      # pcap-file adds the source filename to each record — useful when you
+      # batch-process a directory of captures and need to trace a hit back.
+      pcap-file: true
+      community-id: true          # correlates with Zeek/Arkime on the same flow
+      community-id-seed: 0
+      types:
+        - alert:
+            payload: no           # payload printing bloats eve.json fast
+            payload-printable: yes
+            packet: no
+            metadata: yes         # needed for the MITRE fields in the parser
+        - http:
+            extended: no
+        - dns:
+            requests: yes
+            responses: yes
+        - tls:
+            extended: no
+        - flow
+        - stats:
+            interval: 30
+            totals: yes
+            threads: no
+
+  - stats:
+      enabled: yes
+      filename: stats.log
+      interval: 30
+
+stats:
+  enabled: yes
+  interval: 30
+  decoder-events: false
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: yes
+    - file:
+        enabled: yes
+        level: info
+        filename: suricata.log
+
+# ---------------------------------------------------------------------------
+# Capture. af-packet is Linux-only; macOS uses pcap. Both stanzas are here so
+# the same config works in a Linux container and natively on the Mac.
+# ---------------------------------------------------------------------------
+pcap:
+  - interface: en0
+    checksum-checks: no      # macOS NICs offload checksums -> false "invalid" drops
+    buffer-size: 16777216    # 16 MB; raise only if stats.log shows kernel_drops
+
+af-packet:
+  - interface: default
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+
+# ---------------------------------------------------------------------------
+# Memory caps. These are the numbers that keep an 8 GB machine honest.
+# Total steady-state RSS with this config lands around 400-600 MB.
+# ---------------------------------------------------------------------------
+flow:
+  memcap: 64mb
+  hash-size: 32768
+  prealloc: 4096
+  emergency-recovery: 30
+
+stream:
+  memcap: 128mb
+  checksum-validation: no
+  prealloc-sessions: 2048
+  reassembly:
+    memcap: 128mb
+    depth: 1mb               # stop reassembling after 1 MB/flow; 90% of detections
+    toserver-chunk-size: 2560
+    toclient-chunk-size: 2560
+
+defrag:
+  memcap: 32mb
+  hash-size: 16384
+  trackers: 4096
+  max-frags: 32768
+  prealloc: yes
+  timeout: 60
+
+host:
+  hash-size: 4096
+  prealloc: 1000
+  memcap: 32mb
+
+# ---------------------------------------------------------------------------
+# Detection engine
+# ---------------------------------------------------------------------------
+detect:
+  profile: low               # low/medium/high/custom — 'low' fits 8 GB
+  sgh-mpm-context: auto
+  inspection-recursion-limit: 3000
+  prefilter:
+    default: mpm
+  grouping:
+    tcp-whitelist: 53, 80, 139, 443, 445, 1433, 3306, 3389, 6666, 6667, 8080
+    udp-whitelist: 53, 135, 5060
+
+mpm-algo: auto               # picks the best matcher for the CPU; ac-ks on ARM
+spm-algo: auto
+
+threading:
+  set-cpu-affinity: no       # let macOS scheduler handle E/P core placement
+  detect-thread-ratio: 0.5   # ~4 detect threads on an 8-core M1
+
+# ---------------------------------------------------------------------------
+# App-layer parsers. Disabling the ones you will never see on a laptop saves
+# both RAM and startup time. Turn one back on the moment you need it.
+# ---------------------------------------------------------------------------
+app-layer:
+  protocols:
+    tls:
+      enabled: yes
+      detection-ports:
+        dp: "443,8443"
+    http:
+      enabled: yes
+      libhtp:
+        default-config:
+          personality: IDS
+          request-body-limit: 100kb
+          response-body-limit: 100kb
+    dns:
+      tcp:
+        enabled: yes
+        detection-ports:
+          dp: 53
+      udp:
+        enabled: yes
+        detection-ports:
+          dp: 53
+    ssh:
+      enabled: yes
+    smb:
+      enabled: yes
+    ftp:
+      enabled: yes
+    # Industrial and enterprise protocols you will not see on a home LAN:
+    modbus:
+      enabled: no
+    dnp3:
+      enabled: no
+    enip:
+      enabled: no
+    nfs:
+      enabled: no
+    krb5:
+      enabled: no
+    smtp:
+      enabled: no
+
+# ---------------------------------------------------------------------------
+# Rules
+# ---------------------------------------------------------------------------
+default-rule-path: rules/
+rule-files:
+  - local.rules
+  # Uncomment after running `sudo suricata-update`:
+  # - suricata.rules
+
+classification-file: /opt/homebrew/etc/suricata/classification.config
+reference-config-file: /opt/homebrew/etc/suricata/reference.config

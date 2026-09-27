@@ -1,0 +1,102 @@
+# local.rules — custom detections for this lab
+#
+# SID convention: 1000000–1999999 is the range reserved for local rules.
+# Never reuse an ET/GPL sid; suricata-update will clobber it on the next pull.
+#
+# Test everything with:  suricata -T -c config/suricata.yaml -S rules/local.rules
+# (-T = config test, exits non-zero on a bad rule, so it belongs in CI.)
+
+# --- Recon -------------------------------------------------------------------
+
+alert http $EXTERNAL_NET any -> $HOME_NET any ( \
+    msg:"LOCAL SCAN Nmap NSE user-agent"; \
+    flow:established,to_server; \
+    http.user_agent; content:"Nmap Scripting Engine"; nocase; \
+    classtype:web-application-attack; \
+    metadata:mitre_tactic_name reconnaissance, mitre_technique_id T1595; \
+    sid:1000001; rev:1; )
+
+alert http $EXTERNAL_NET any -> $HOME_NET any ( \
+    msg:"LOCAL POLICY Empty user-agent on inbound HTTP"; \
+    flow:established,to_server; \
+    http.user_agent; bsize:0; \
+    classtype:misc-activity; \
+    metadata:mitre_tactic_name defense_evasion, mitre_technique_id T1071; \
+    sid:1000002; rev:1; )
+
+# --- Credential access -------------------------------------------------------
+
+# Threshold, not a bare match: one failed SSH connect is noise, 5 in 60s is a
+# pattern. 'by_src' keys the counter on the attacker, not the victim.
+alert tcp $EXTERNAL_NET any -> $HOME_NET 22 ( \
+    msg:"LOCAL SCAN Possible SSH brute force (5+ attempts/60s)"; \
+    flow:to_server; \
+    flags:S; \
+    threshold:type threshold, track by_src, count 5, seconds 60; \
+    classtype:attempted-recon; \
+    metadata:mitre_tactic_name credential_access, mitre_technique_id T1110; \
+    sid:1000003; rev:1; )
+
+alert http $HOME_NET any -> $EXTERNAL_NET any ( \
+    msg:"LOCAL POLICY Cleartext password field over plain HTTP"; \
+    flow:established,to_server; \
+    http.method; content:"POST"; \
+    http.request_body; content:"password="; nocase; \
+    classtype:policy-violation; \
+    metadata:mitre_tactic_name credential_access, mitre_technique_id T1040; \
+    sid:1000004; rev:1; )
+
+# --- Initial access / exploitation -------------------------------------------
+
+# Log4Shell. The jndi: prefix can appear in any header, so match the raw
+# header buffer rather than a single named field.
+alert http any any -> $HOME_NET any ( \
+    msg:"LOCAL EXPLOIT Possible Log4j JNDI lookup in HTTP header"; \
+    flow:established,to_server; \
+    http.header; content:"jndi"; nocase; \
+    classtype:attempted-admin; \
+    metadata:mitre_tactic_name initial_access, mitre_technique_id T1190; \
+    sid:1000005; rev:1; )
+
+alert http $EXTERNAL_NET any -> $HOME_NET any ( \
+    msg:"LOCAL EXPLOIT SQL injection tautology in URI"; \
+    flow:established,to_server; \
+    http.uri; pcre:"/(\x27|\%27)[\s+]*or[\s+]*\d+[\s+]*=[\s+]*\d+/i"; \
+    classtype:web-application-attack; \
+    metadata:mitre_tactic_name initial_access, mitre_technique_id T1190; \
+    sid:1000006; rev:1; )
+
+# --- Command and control -----------------------------------------------------
+
+alert dns $HOME_NET any -> any 53 ( \
+    msg:"LOCAL TROJAN DNS query to lab sinkhole domain"; \
+    dns.query; content:"sinkhole.example-abuse.net"; nocase; \
+    classtype:trojan-activity; \
+    metadata:mitre_tactic_name command_and_control, mitre_technique_id T1071; \
+    sid:1000007; rev:1; )
+
+# Long DNS labels are the classic signature of DNS tunnelling / exfil.
+alert dns $HOME_NET any -> any 53 ( \
+    msg:"LOCAL EXFIL Abnormally long DNS query label (possible tunnelling)"; \
+    dns.query; content:!"."; depth:60; \
+    classtype:policy-violation; \
+    metadata:mitre_tactic_name exfiltration, mitre_technique_id T1048; \
+    sid:1000008; rev:1; )
+
+alert tls $HOME_NET any -> $EXTERNAL_NET any ( \
+    msg:"LOCAL POLICY TLS SNI matches dynamic DNS provider"; \
+    tls.sni; content:"dyn-ddns"; nocase; \
+    classtype:misc-activity; \
+    metadata:mitre_tactic_name command_and_control, mitre_technique_id T1568; \
+    sid:1000009; rev:1; )
+
+# --- Canary ------------------------------------------------------------------
+
+# Fires on the testmynids.org check. If this never fires, your pipeline is
+# broken — not your network being clean. Always keep one known-good canary.
+alert http $HOME_NET any -> $EXTERNAL_NET any ( \
+    msg:"LOCAL CANARY testmynids.org reachability check"; \
+    flow:established,to_server; \
+    http.host; content:"testmynids.org"; \
+    classtype:not-suspicious; \
+    sid:1000010; rev:1; )

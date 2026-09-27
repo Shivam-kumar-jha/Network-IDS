@@ -1,0 +1,17 @@
+# Captures and logs — never commit these, they contain real network data
+data/*.pcap
+data/*.pcapng
+data/ground_truth.csv
+logs/*
+out/*
+!data/.gitkeep
+!logs/.gitkeep
+
+# Secrets
+*.key
+*.pem
+.env
+
+__pycache__/
+*.pyc
+.DS_Store

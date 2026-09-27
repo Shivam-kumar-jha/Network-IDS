@@ -1,0 +1,24 @@
+# Never commit capture data — it contains real network traffic
+*.pcap
+*.pcapng
+**/data/ground_truth.csv
+**/logs/*
+**/out/*
+!**/logs/.gitkeep
+!**/data/.gitkeep
+
+# Secrets
+*.key
+*.pem
+.env
+*_apikey*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store
+APPLICATION-KIT.md
