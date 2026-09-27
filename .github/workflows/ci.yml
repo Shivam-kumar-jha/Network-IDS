@@ -14,11 +14,9 @@ jobs:
           python-version: '3.11'
 
       - name: Generate seeded test data
-        working-directory: 01-network-ids-suricata
         run: python3 scripts/gen_sample_eve.py -o logs/eve.json -n 120 --seed 1337
 
       - name: Parse and verify alert count
-        working-directory: 01-network-ids-suricata
         run: |
           python3 scripts/parse_alerts.py -i logs/eve.json -o out/alerts.csv -q
           n=$(($(wc -l < out/alerts.csv) - 1))
@@ -26,14 +24,12 @@ jobs:
           echo "PASS: 120 alerts extracted from 600 events"
 
       - name: Verify severity gating returns exit 1
-        working-directory: 01-network-ids-suricata
         run: |
           set +e
           python3 scripts/parse_alerts.py -i logs/eve.json -o out/a.csv --fail-severity 1 -q
           [ $? -eq 1 ] && echo "PASS: gating works" || { echo "FAIL"; exit 1; }
 
       - name: Ground-truth PCAP generates and is structurally valid
-        working-directory: 01-network-ids-suricata
         run: |
           python3 scripts/gen_test_pcap.py -o data/output.pcap --truth data/ground_truth.csv
           python3 - <<'EOF'
@@ -60,4 +56,4 @@ jobs:
       - name: Shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
-          shellcheck -S warning 01-network-ids-suricata/scripts/*.sh || true
+          shellcheck -S warning scripts/*.sh || true
